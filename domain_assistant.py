@@ -243,26 +243,37 @@ class TextGenerator(Protocol):
 
 
 class OpenAIGenerator:
-    def __init__(self, max_output_tokens: int = 300) -> None:
-        api_key = os.getenv("OPENAI_API_KEY", "").strip()
-        self.model = os.getenv("OPENAI_MODEL", "").strip()
+    def __init__(self, max_output_tokens: int = 2000) -> None:
+        api_key = (
+            os.getenv("OPENAI_API_KEY", "") or os.getenv("DEEPSEEK_API_KEY", "")
+        ).strip()
+        self.model = (
+            os.getenv("OPENAI_MODEL", "") or os.getenv("DEEPSEEK_MODEL", "")
+        ).strip()
+        base_url = (
+            os.getenv("OPENAI_BASE_URL", "") or os.getenv("DEEPSEEK_BASE_URL", "")
+        ).strip()
         if not api_key:
             raise RuntimeError("OPENAI_API_KEY is missing from .env")
         if not self.model:
             raise RuntimeError("OPENAI_MODEL is missing from .env")
-        self.client = OpenAI(api_key=api_key)
+        self.client = OpenAI(api_key=api_key, base_url=base_url or None)
         self.max_output_tokens = max_output_tokens
 
     def generate(self, prompt: str) -> str:
-        response = self.client.responses.create(
-            model=self.model,
-            input=prompt,
-            temperature=0,
-            max_output_tokens=self.max_output_tokens,
-        )
-        answer = response.output_text.strip()
+        request: dict[str, Any] = {
+            "model": self.model,
+            "messages": [{"role": "user", "content": prompt}],
+            "max_tokens": self.max_output_tokens,
+        }
+        # Reasoning models reject sampling parameters.
+        if "reasoner" not in self.model:
+            request["temperature"] = 0
+
+        response = self.client.chat.completions.create(**request)
+        answer = (response.choices[0].message.content or "").strip()
         if not answer:
-            raise RuntimeError("OpenAI returned an empty answer")
+            raise RuntimeError("The model returned an empty answer")
         return answer
 
 
