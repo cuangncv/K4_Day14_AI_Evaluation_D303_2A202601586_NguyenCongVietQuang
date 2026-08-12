@@ -30,11 +30,11 @@ critical.
 
 | Metric | Acceptable Low Score Scenario | Critical Low Score Scenario | Action Required |
 |---|---|---|---|
-| Faithfulness | | | |
-| Answer Relevance | | | |
-| Context Recall | | | |
-| Context Precision | | | |
-| Completeness | | | |
+| Faithfulness | Answer đúng nhưng diễn đạt lại bằng từ khác context (paraphrase), bị heuristic overlap phạt oan | Answer nêu số ngày, số tiền hoặc điều kiện bảo hành không có trong corpus, khiến khách hành động sai theo lời bot | Critical: siết prompt "chỉ dùng context", bắt trích `source_doc`, block deploy |
+| Answer Relevance | Question mơ hồ hoặc rộng; answer đúng ý nhưng dùng từ vựng khác question | Answer trả lời sang chủ đề khác (hỏi đổi trả, đáp bảo hành), tức là sai intent | Kiểm tra intent routing và query rewriting; làm rõ nhiệm vụ trong prompt |
+| Context Recall | Case adversarial hoặc out of scope: đúng ra không tồn tại evidence để lấy, recall thấp là hợp lý | Case Easy hoặc Medium mà recall thấp, tức evidence có sẵn trong corpus nhưng retriever bỏ sót | Tăng `top-k`, sửa chunking, thêm synonym và alias cho từ khoá domain |
+| Context Precision | Chunk đúng vẫn nằm trong nhóm đầu, chỉ lẫn vài chunk thừa phía sau; answer không bị ảnh hưởng | Chunk đúng bị đẩy xuống cuối, generator đọc phải noise trước nên trả lời sai hoặc thiếu | Rerank kết quả, giảm `top-k`, cải thiện scoring function |
+| Completeness | Expected answer dài dòng, answer súc tích nhưng đã đủ ý chính | Thiếu điều kiện, ngoại lệ hoặc mốc thời gian (nói "24 tháng" mà bỏ "tính từ confirmed delivery") | Xem Context Recall trước: nếu recall thấp thì sửa retriever, nếu recall cao thì bắt prompt liệt kê đủ conditions và exceptions |
 
 ### Exercise 1.2 — Bias trong LLM-as-a-Judge
 
@@ -46,15 +46,41 @@ Ba bias thường gặp:
 
 **Câu 1: Thiết kế experiment phát hiện position bias với ít nhất hai conditions.**
 
-> *Câu trả lời:*
+> *Câu trả lời:* Lấy N cặp answer (A, B) cho cùng một question. Condition 1 đưa
+> judge theo thứ tự A rồi B. Condition 2 dùng đúng cặp đó nhưng đảo thành B rồi
+> A. Giữ nguyên judge model, rubric và temperature ở cả hai condition, biến duy
+> nhất được đổi là vị trí.
+>
+> Đo hai con số. Thứ nhất là tỉ lệ thắng của vị trí đứng đầu trong mỗi condition,
+> không có bias thì phải xấp xỉ 50 phần trăm. Thứ hai là tỉ lệ cặp mà judge đổi
+> kết luận khi đảo thứ tự. Nếu vị trí đầu thắng lệch hẳn ở cả hai condition, hoặc
+> tỉ lệ đổi kết luận cao, judge đang chấm theo vị trí chứ không theo chất lượng.
+> Khắc phục bằng cách randomize thứ tự, hoặc chấm cả hai chiều rồi lấy trung bình.
 
 **Câu 2: Làm thế nào giảm verbosity bias bằng rubric design?**
 
-> *Câu trả lời:*
+> *Câu trả lời:* Chấm theo checklist claim bắt buộc, đánh dấu có hoặc không cho
+> từng ý, thay vì chấm cảm tính "mức độ chi tiết". Như vậy answer dài không tự
+> động ăn điểm, vì điểm gắn với số ý đúng chứ không gắn với độ dài.
+>
+> Ba biện pháp cụ thể. Một là ghi thẳng vào rubric rằng thông tin thừa, không
+> được hỏi thì bị trừ điểm. Hai là tách thành nhiều dimension (Correctness,
+> Completeness, Relevance) thay vì một điểm tổng, để độ dài không kéo theo mọi
+> dimension. Ba là kèm ví dụ mẫu một answer ngắn được 5 điểm để neo chuẩn cho
+> judge.
 
 **Câu 3: Tại sao cần calibrate LLM judge với human labels?**
 
-> *Câu trả lời:*
+> *Câu trả lời:* Judge cũng chỉ là một model. Nó có bias riêng (position,
+> verbosity, self preference) và điểm sẽ trôi khi đổi model hoặc đổi version. Nếu
+> không có human label đối chiếu, ta không biết "4 điểm" của judge tương ứng với
+> chất lượng thật nào, nên con số đẹp mà vô nghĩa.
+>
+> Cách làm là gán nhãn tay một tập nhỏ khoảng 30 tới 50 case, đo mức đồng thuận
+> giữa judge và người bằng Cohen's kappa hoặc tỉ lệ khớp, soi các case lệch để
+> sửa lại rubric, rồi lặp đến khi mức đồng thuận đủ cao. Chỉ khi đó mới được dùng
+> điểm judge làm quality gate, vì lúc đó ta đã biết sai số của thước đo là bao
+> nhiêu.
 
 ### Exercise 1.3 — Evaluation trong CI/CD
 
@@ -62,13 +88,30 @@ Ba bias thường gặp:
 
 | Metric | Threshold | Lý do |
 |---|---:|---|
-| Faithfulness | | |
-| Answer Relevance | | |
-| Completeness | | |
+| Faithfulness | 0.80 | Nghiêm nhất trong ba. Bot bịa chính sách bảo hành hoặc hoàn tiền khiến khách hành động sai và shop phải chịu trách nhiệm. Đây là thiệt hại trực tiếp, không sửa được bằng lời xin lỗi |
+| Answer Relevance | 0.70 | Lạc đề làm khách phải hỏi lại, tốn trải nghiệm nhưng không gây cam kết sai. Để thấp hơn vì heuristic đếm từ phạt oan answer paraphrase |
+| Completeness | 0.70 | Thiếu điều kiện hoặc ngoại lệ là rủi ro thật, nhưng answer súc tích đúng ý vẫn bị metric trừ điểm, nên không đặt ngang Faithfulness |
+
+Ngoài ba ngưỡng trung bình trên, thêm hai luật chặn. Một là không case adversarial
+nào được fail, tính cả A01, A02 và A03. Hai là nếu regression vượt 0.05 so với
+baseline thì block, kể cả khi điểm tuyệt đối vẫn đạt ngưỡng.
 
 **Câu 2: Khi nào dùng offline evaluation, online evaluation và human review?**
 
-> *Câu trả lời:*
+> *Câu trả lời:* Offline evaluation chạy trên golden dataset mỗi lần đổi prompt,
+> đổi model hoặc chỉnh retriever, thực hiện trước khi merge. Vì nó rẻ, nhanh và
+> lặp lại được nên hợp làm CI gate. Nhược điểm là chỉ đo được 20 case cố định,
+> không phản ánh traffic thật.
+>
+> Online evaluation chạy liên tục trên request thật sau khi deploy, theo dõi tỉ lệ
+> escalation, câu hỏi lặp lại và phản hồi tiêu cực của khách. Nó bắt được những gì
+> golden dataset không lường trước như câu hỏi mới, sản phẩm mới, chính sách vừa
+> đổi. Bù lại không có đáp án chuẩn nên chỉ đo được gián tiếp.
+>
+> Human review dùng cho case rủi ro cao như từ chối bảo hành, hoàn tiền, dữ liệu
+> cá nhân, dùng cho mẫu ngẫu nhiên định kỳ, và dùng để calibrate LLM judge như đã
+> nói ở Ex 1.2 Câu 3. Cách này đắt và chậm nên không thể chạy mọi request, nhưng
+> đây là nguồn chuẩn duy nhất để biết hai loại trên có đang đo đúng hay không.
 
 ---
 
