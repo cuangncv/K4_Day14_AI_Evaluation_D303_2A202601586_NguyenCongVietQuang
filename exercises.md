@@ -402,22 +402,71 @@ thay đổi Context Recall hay không.
 4. Rerank cùng tập chunks, không thêm hoặc xóa chunk.
 5. Tính lại hai metrics và giải thích kết quả.
 
+Reranker dùng `rerank_by_overlap()`: sắp xếp lại cùng tập chunks theo số từ nội
+dung trùng với câu hỏi, nhiều nhất lên đầu. Đo trên cả 20 case, bảng dưới liệt kê
+7 case có Precision thay đổi, 13 case còn lại giữ nguyên điểm.
+
 | ID | Recall before | Recall after | Precision before | Precision after | Delta Precision |
 |---|---:|---:|---:|---:|---:|
-| | | | | | |
-| | | | | | |
-| | | | | | |
-| | | | | | |
-| | | | | | |
-| **Avg** | | | | | |
+| M05 | 0.848 | 0.848 | 0.750 | 1.000 | +0.250 |
+| H03 | 0.837 | 0.837 | 0.887 | 0.950 | +0.062 |
+| E01 | 0.963 | 0.963 | 0.950 | 1.000 | +0.050 |
+| A02 | 0.794 | 0.794 | 0.950 | 1.000 | +0.050 |
+| M04 | 0.950 | 0.950 | 0.887 | 0.804 | -0.083 |
+| M07 | 0.909 | 0.909 | 1.000 | 0.887 | -0.113 |
+| A01 | 0.760 | 0.760 | 0.583 | 0.367 | -0.217 |
+| **Avg** | 0.886 | 0.886 | 0.940 | 0.940 | +0.000 |
+
+Dòng Avg tính trên toàn bộ 20 case. Kết quả trung bình là hòa: 4 case tốt lên,
+3 case xấu đi, phần tăng và phần giảm triệt tiêu nhau. Đây là kết quả trái với
+giả thuyết ban đầu rằng reranking sẽ kéo Precision lên.
 
 **Tại sao Recall dự kiến không đổi?**
 
-> *Câu trả lời:*
+> *Câu trả lời:* Vì Context Recall đo độ phủ trên hợp của tất cả chunks, mà phép
+> hợp không quan tâm thứ tự. Reranker chỉ sắp xếp lại đúng tập chunks đó, không
+> thêm và không bớt cái nào, nên tập từ dùng để tính recall y hệt trước và sau.
+>
+> Đo thực tế xác nhận đúng như vậy: cả 20 case đều có recall giống hệt tới từng
+> chữ số, và script kiểm tra tập chunks trước và sau khi sắp xếp cũng cho kết
+> quả trùng khớp hoàn toàn. Ngược lại, Context Precision dùng Average Precision
+> nên phụ thuộc vị trí, cùng một chunk đứng hạng nhất và hạng năm cho điểm khác
+> nhau. Đây chính là bằng chứng cho thấy hai metric đo hai chuyện khác nhau:
+> recall trả lời câu có lấy đủ không, precision trả lời câu có xếp đúng không.
 
 **Khi nào reranking không đủ và cần sửa retriever/query/chunking?**
 
-> *Câu trả lời:*
+> *Câu trả lời:* Ba trường hợp, trong đó trường hợp đầu tiên là bài học lớn nhất
+> rút ra từ chính lần đo này.
+>
+> Một, khi reranker dùng cùng loại tín hiệu với retriever thì nó không sửa được
+> gì, thậm chí làm tệ hơn. A01 là ví dụ rõ nhất, Precision tụt từ 0.583 xuống
+> 0.367. Lý do nằm trong trace: chunk duy nhất thực sự liên quan là đoạn về phạm
+> vi trong `00_system_scope.md`, phủ được 76% số từ của đáp án, nhưng chỉ trùng
+> đúng 1 từ với câu hỏi. Trong khi đó chunk nhiễu về đổi trả phụ kiện trùng tới
+> 2 từ nhờ chữ screen trong screen protectors, và chunk bảo hành cũng trùng 2 từ.
+> Reranker sắp theo số từ trùng nên đẩy hai chunk nhiễu lên trên và dìm chunk
+> đúng xuống. Cả BM25 lẫn `rerank_by_overlap()` đều là so trùng từ, nên chúng
+> chung một điểm mù, chạy hai lượt cùng một tín hiệu chỉ khuếch đại sai lầm chứ
+> không sửa được. Muốn sửa phải đổi sang tín hiệu khác, ví dụ cross-encoder
+> (mô hình chấm cặp câu hỏi và đoạn văn) hoặc embedding hiểu ngữ nghĩa.
+>
+> Hai, khi bằng chứng cần thiết không nằm trong tập lấy về thì reranking vô
+> dụng theo định nghĩa, vì nó chỉ đổi thứ tự thứ đã có. H05 là trường hợp này:
+> recall 0.689 và không một chunk nào từ `08_accounts_privacy_and_security.md`
+> lọt vào top 5. Sắp xếp lại 5 chunk sai vẫn ra 5 chunk sai. Ở đây phải sửa ở
+> tầng truy hồi, cụ thể là tách câu hỏi nhiều ý thành từng ý rồi truy hồi riêng,
+> hoặc tăng `top_k`.
+>
+> Ba, khi lỗi nằm ở cách chia tài liệu. Nếu một quy tắc bị cắt làm đôi giữa hai
+> chunk thì không thứ tự nào cứu được, vì đưa lên đầu thì bot vẫn chỉ nhận được
+> nửa quy tắc. Trường hợp này phải sửa chunking, ví dụ cắt theo đoạn văn hoàn
+> chỉnh hoặc cho hai chunk kề nhau chồng lấn một phần.
+>
+> Nói ngắn gọn, reranking chỉ giải quyết đúng một loại bệnh là lấy đủ nhưng xếp
+> sai, và chỉ khi tín hiệu xếp hạng khác với tín hiệu truy hồi. Chẩn đoán bằng
+> cặp số: recall cao mà precision thấp thì rerank có cửa, recall thấp thì phải
+> sửa truy hồi trước.
 
 ---
 
@@ -431,11 +480,11 @@ Hoàn thành `reflection.md` bằng kết quả thật từ Exercise 3.2.
 
 Hoàn thành kiểm tra cuối trong khoảng 16:50–17:00.
 
-- [ ] Tất cả required tests pass.
-- [ ] `golden_dataset.json` validate thành công.
-- [ ] Exercise 3.1 hoàn thành trong file JSON và bảng kết quả phía trên.
-- [ ] Exercise 3.2 có năm metrics, aggregate report và ba cases thấp nhất.
-- [ ] Exercise 3.3 có rubric 1–5 và bias controls.
-- [ ] `reflection.md` có ba failure analyses và regression strategy.
-- [ ] Đã copy `template.py` thành `solution/solution.py`.
-- [ ] Exercise 3.4 và 3.5 chỉ làm nếu chọn bonus.
+- [x] Tất cả required tests pass.
+- [x] `golden_dataset.json` validate thành công.
+- [x] Exercise 3.1 hoàn thành trong file JSON và bảng kết quả phía trên.
+- [x] Exercise 3.2 có năm metrics, aggregate report và ba cases thấp nhất.
+- [x] Exercise 3.3 có rubric 1–5 và bias controls.
+- [x] `reflection.md` có ba failure analyses và regression strategy.
+- [x] Đã copy `template.py` thành `solution/solution.py`.
+- [x] Exercise 3.4 và 3.5 chỉ làm nếu chọn bonus.
